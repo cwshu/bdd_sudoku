@@ -43,7 +43,7 @@ class BoolOp():
         pyeda_expr_ops = []
 
         for operand in self.operands:
-            if type(operand) == str:
+            if type(operand) in (str, int):
                 expr_op = pyeda.inter.expr(operand)
             elif type(operand) == BoolOp:
                 expr_op = operand.gen_pyeda_expr()
@@ -94,13 +94,27 @@ def bit_value(value, bit):
     value = value >> bit
     return value % 2
 
+def combination_2(size):
+    c = []
+    for index1 in range(size):
+        for index2 in range(index1+1, size):
+            c.append((index1, index2))
+    return c
+
+
 def binary_encode_number_range(stop_num, binary_size, var_name):
     '''binary encoding an integer variable, whose range is between 0 and stop-1.
     '''
 
     assert stop_num <= 2**binary_size, 'number range should be in the binary size'
     if stop_num <= 0:
-        return []
+        return BoolOp()
+        '''
+        # if stop_num == power(2, binary_size), then range_restrict == empty boolean expression
+        # which means BoolOp with no operand, then __bool__() is false
+        if range_restrict:
+            puzzle_restrict.append_operand(range_restrict)
+        '''
 
     # algorithm note
     # 
@@ -134,108 +148,122 @@ def binary_encode_number_range(stop_num, binary_size, var_name):
 
     return result
 
-def combination_2(size):
-    c = []
-    for index1 in range(size):
-        for index2 in range(index1+1, size):
-            c.append((index1, index2))
-    return c
+class SudokuEncodeBox():
 
-def inequality_for_each_2_elements(elements, binary_size):
+    def __init__(self, puzzle):
+        self.puzzle = puzzle
 
-    # AND(e1 != e2, e1 != e3, ... ) # C(n, 2) for n elements
-    # e1 != e2: OR(e1.b1 ^ e2.b1, e1.b2 ^ e2.b2, e1.b3 ^ e2.b3 ... ) # to b[m] for binary_size m
-    if len(elements) <= 1:
-        return None
+        self.size_square = len(puzzle)
+        self.binary_size = int(math.log2(self.size_square - 1)) + 1
 
-    combination_2_list = combination_2(len(elements))
+    def encoded_cell_bit(self, row, col, bit):
+        '''if cell doesn't have value: return encoded literal
+           else: return value(0 or 1)
+        '''
+        if self.puzzle[row][col] == 0:
+            return 'x_{row}_{col}_{bit}'.format(row=row, col=col, bit=bit)
+        else:
+            return bit_value(self.puzzle[row][col], bit)
 
-    each_ineqality = BoolOp('AND') # each 2 elements wouldn't be same.
-    for e1_idx, e2_idx in combination_2_list: # e1: element1
+    def inequality_for_each_2_elements(self, elements, binary_size):
 
-        e1 = elements[e1_idx]
-        e2 = elements[e2_idx]
+        # AND(e1 != e2, e1 != e3, ... ) # C(n, 2) for n elements
+        # e1 != e2: OR(e1.b1 ^ e2.b1, e1.b2 ^ e2.b2, e1.b3 ^ e2.b3 ... ) # to b[m] for binary_size m
+        if len(elements) <= 1:
+            return None
 
-        inequality = BoolOp('OR') # one bit difference is enough
-        for bit in range(binary_size):
-            # use xor operator for != (in boolean expression)
-            bit_diff_template = 'x_{row1}_{col1}_{bit} ^ x_{row2}_{col2}_{bit}'
-            bit_diff = bit_diff_template.format(row1=e1[0], col1=e1[1], row2=e2[0], col2=e2[1], bit=bit)
-            inequality.append_operand(bit_diff)
+        combination_2_list = combination_2(len(elements))
 
-        each_ineqality.append_operand(inequality)
+        each_ineqality = BoolOp('AND') # each 2 elements wouldn't be same.
+        for e1_idx, e2_idx in combination_2_list: # e1: element1
 
-    return each_ineqality
+            e1 = elements[e1_idx]
+            e2 = elements[e2_idx]
 
-def encode_puzzle(puzzle, size_square):
+            inequality = BoolOp('OR') # one bit difference is enough
+            for bit in range(binary_size):
+                # use xor operator for != (in boolean expression)
+                bit_diff = BoolOp('XOR')
+                bit_diff.append_operand(self.encoded_cell_bit(row=e1[0], col=e1[1], bit=bit))
+                bit_diff.append_operand(self.encoded_cell_bit(row=e2[0], col=e2[1], bit=bit))
 
-    binary_size = int(math.log2(size_square - 1)) + 1
-    # 4 => 0 ~ 3 =>   00 ~   11 => binary size 2
-    # 5 => 0 ~ 4 =>  000 ~  100 => binary size 3
-    # 8 => 0 ~ 7 =>  000 ~  111 => binary size 3
-    # 9 => 0 ~ 8 => 0000 ~ 1000 => binary size 4
+                inequality.append_operand(bit_diff)
 
-    # variable: x_<row>_<col>_<bit>
+            each_ineqality.append_operand(inequality)
 
-    # 1. for each row
-        # inequality_each(all elements in row)
-    # 2. for each col
-    # 3. for each block
-    # 4. fill in variable value
-    
-    restrictions = BoolOp('AND') # each requirement must be satisfy
+        return each_ineqality
 
-    # 1. for each row
-        # x[row][col1][bit] != x[row][col2][bit]
-    for row in range(size_square):
-        row_elements = [ (row, col_index) for col_index in range(size_square) ]
-        row_restrict = inequality_for_each_2_elements(row_elements, binary_size)
-        restrictions.append_operand(row_restrict)
-    
-    # 2. for each col
-        # x[row1][col][bit] != x[row2][col][bit]
-    for col in range(size_square):
-        col_elements = [ (row_index, col) for row_index in range(size_square) ]
-        col_restrict = inequality_for_each_2_elements(col_elements, binary_size)
-        restrictions.append_operand(col_restrict)
-
-    # 3. for each block
-        # x[row1][col1][bit] != x[row2][col2][bit]
-    for block in range(size_square):
-        block_elements = [ block_to_row_col(block, index, size_square) for index in range(size_square) ]
-        block_restrict = inequality_for_each_2_elements(block_elements, binary_size)
-        restrictions.append_operand(block_restrict)
-        # print('block_elements: ', block_elements)
-
-    # print(size_square, binary_size)
-    # print(binary_encode_number_range(size_square, binary_size, 'x') == True)
-
-    # 4. fill in number
-    for row in range(size_square):
-        for col in range(size_square):
-            if puzzle[row][col] == 0:
-                # from 0 ~ size_square - 1
-                range_restrict = binary_encode_number_range(size_square, binary_size, 'x_{}_{}_'.format(row, col))
-
-                # if stop_num == power(2, binary_size), then range_restrict == empty boolean expression
-                # which means BoolOp with no operand, then __bool__() is false
-                if range_restrict:
-                    restrictions.append_operand(range_restrict)
-
-                continue
-
+    def encode_single_cell(self, row, col):
+        if self.puzzle[row][col] == 0:
+            # from 0 ~ size_square - 1
+            return binary_encode_number_range(self.size_square, self.binary_size, 'x_{}_{}_'.format(row, col))
+        else:
             # for each cell != 0
             # set every bits to stable value
             cell_value = BoolOp('AND')
-            for bit in range(binary_size):
-                if bit_value(puzzle[row][col], bit) == 1:
+            for bit in range(self.binary_size):
+                if bit_value(self.puzzle[row][col], bit) == 1:
                     cell_value.append_operand( 'x_{}_{}_{}'.format(row, col, bit) )
                 else:
                     cell_value.append_operand( '~x_{}_{}_{}'.format(row, col, bit) )
-                
-            restrictions.append_operand(cell_value)
-                    
-    return restrictions
+            return cell_value
+        
+    def encode_each_cell(self):
+        puzzle_restrict = BoolOp('AND')
+
+        for row in range(self.size_square):
+            for col in range(self.size_square):
+                encoded_cell = self.encode_single_cell(row, col)
+                if encoded_cell:
+                    puzzle_restrict.append_operand(encoded_cell)
+
+        return puzzle_restrict
+
+    def encode(self):
+        # 4 => 0 ~ 3 =>   00 ~   11 => binary size 2
+        # 5 => 0 ~ 4 =>  000 ~  100 => binary size 3
+        # 8 => 0 ~ 7 =>  000 ~  111 => binary size 3
+        # 9 => 0 ~ 8 => 0000 ~ 1000 => binary size 4
+
+        # variable: x_<row>_<col>_<bit>
+
+        # 1. for each row
+            # inequality_each(all elements in row)
+        # 2. for each col
+        # 3. for each block
+        # 4. fill in variable value
+
+        restrictions = BoolOp('AND') # each requirement must be satisfy
+        # 1. for each row
+            # x[row][col1][bit] != x[row][col2][bit]
+        for row in range(self.size_square):
+            row_elements = [ (row, col_index) for col_index in range(self.size_square) ]
+            row_restrict = self.inequality_for_each_2_elements(row_elements, self.binary_size)
+            restrictions.append_operand(row_restrict)
+        
+        # 2. for each col
+            # x[row1][col][bit] != x[row2][col][bit]
+        for col in range(self.size_square):
+            col_elements = [ (row_index, col) for row_index in range(self.size_square) ]
+            col_restrict = self.inequality_for_each_2_elements(col_elements, self.binary_size)
+            restrictions.append_operand(col_restrict)
+
+        # 3. for each block
+            # x[row1][col1][bit] != x[row2][col2][bit]
+        for block in range(self.size_square):
+            block_elements = [ block_to_row_col(block, index, self.size_square) for index in range(self.size_square) ]
+            block_restrict = self.inequality_for_each_2_elements(block_elements, self.binary_size)
+            restrictions.append_operand(block_restrict)
+            # print('block_elements: ', block_elements)
+
+        # print(self.size_square, self.binary_size)
+        # print(binary_encode_number_range(self.size_square, self.binary_size, 'x') == True)
+
+        # 4. fill in number
+        cells_restriction = self.encode_each_cell()
+        restrictions.operands.extend(cells_restriction.operands) # little dirty.
+                        
+        return restrictions
 
 # encoded_puzzle = 0
 # puzzle_expr = 0
@@ -252,9 +280,9 @@ def main():
        
     input_file = sys.argv[1]
     puzzle = parse_puzzle(input_file)
-    puzzle_size_square = len(puzzle)
 
-    encoded_puzzle = encode_puzzle(puzzle, puzzle_size_square)
+    sudoku_box = SudokuEncodeBox(puzzle)
+    encoded_puzzle = sudoku_box.encode()
     # print('encoded')
     puzzle_expr = encoded_puzzle.gen_pyeda_expr()
     # print('generate pyeda.expr()')
